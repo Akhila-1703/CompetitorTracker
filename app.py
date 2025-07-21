@@ -1,37 +1,40 @@
-"""
-Competitor Intelligence Dashboard - Main Streamlit Application
-Monitors competitor changelog updates, generates AI-powered insights, and tracks competitive momentum.
-"""
-
 import streamlit as st
-import os
-import uuid
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-import logging
 
-# Load environment variables
-load_dotenv()
+try:
+    st.title("🔍 Competitor Intelligence Dashboard (Startup Check)")
+    st.info("✅ App is starting...")
 
-# Import local modules
-from scraper import ChangelogScraper, get_changelog
-from summarizer import ChangelogSummarizer
-from config import COMPETITORS
-from dashboard import create_momentum_chart, format_summary_card
-from database import DatabaseManager
-from notifier import send_slack_notification
+    import os
+    import uuid
+    from datetime import datetime, timedelta
+    from dotenv import load_dotenv
+    import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+    # Load environment variables
+    load_dotenv()
 
-# Page configuration
-st.set_page_config(
-    page_title="Competitor Intelligence Dashboard",
-    page_icon="🔍",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+    # Import local modules
+    from scraper import ChangelogScraper, get_changelog
+    from summarizer import ChangelogSummarizer
+    from config import COMPETITORS
+    from dashboard import create_momentum_chart, format_summary_card
+    from database import DatabaseManager
+    from notifier import send_slack_notification
+
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    # Page configuration
+    st.set_page_config(
+        page_title="Competitor Intelligence Dashboard",
+        page_icon="🔍",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+
+except Exception as e:
+    st.error(f"❌ Startup error: {e}")
 
 def main():
     """Main application function."""
