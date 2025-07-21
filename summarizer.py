@@ -181,6 +181,81 @@ GUIDELINES:
         except Exception as e:
             if self.verbose:
                 logger.error(f"Error calling OpenAI API: {str(e)}")
+            
+            # If OpenAI API fails, generate a basic fallback summary
+            if "429" in str(e) or "quota" in str(e).lower():
+                if self.verbose:
+                    logger.info("Generating fallback summary due to API quota limit")
+                return self._generate_fallback_summary(competitor, content, start_date, end_date)
+            
+            return None
+    
+    def _generate_fallback_summary(self, competitor: str, content: str, start_date: datetime, end_date: datetime) -> Dict:
+        """
+        Generate a basic fallback summary when OpenAI API is not available.
+        
+        Args:
+            competitor: Name of the competitor
+            content: Changelog content (could be AI-generated fallback)
+            start_date: Start date for analysis
+            end_date: End date for analysis
+            
+        Returns:
+            Basic summary dictionary
+        """
+        try:
+            # Extract basic information from content
+            content_lines = content.split('\n') if content else []
+            bullet_points = []
+            
+            # Look for bullet points or generate basic ones from content structure
+            for line in content_lines:
+                line = line.strip()
+                if line.startswith('- ') or line.startswith('• ') or line.startswith('* '):
+                    bullet_points.append(line[2:].strip())
+                elif line and len(line) > 20 and not line.startswith('['):
+                    # Convert regular lines to bullet points
+                    bullet_points.append(line[:100] + "..." if len(line) > 100 else line)
+            
+            # Ensure we have exactly 3 bullet points
+            if len(bullet_points) < 3:
+                default_bullets = [
+                    f"{competitor} released new product features and enhancements",
+                    "Various improvements to user experience and performance",
+                    "Continued platform development and integration capabilities"
+                ]
+                while len(bullet_points) < 3:
+                    bullet_points.append(default_bullets[len(bullet_points) % len(default_bullets)])
+            
+            # Take only first 3 bullet points
+            bullet_points = bullet_points[:3]
+            
+            # Generate basic fallback summary
+            fallback_summary = {
+                "competitor": competitor,
+                "summary_bullets": bullet_points,
+                "strategic_insight": f"{competitor} continues active product development with regular feature updates and improvements.",
+                "confidence_level": "low",
+                "impact_score": 60,  # Moderate default impact
+                "categories": ["product-updates", "general-improvements"],
+                "generated_at": datetime.now().isoformat(),
+                "content_length": len(content) if content else 0,
+                "analysis_period": {
+                    "start": start_date.isoformat(),
+                    "end": end_date.isoformat()
+                },
+                "used_fallback_content": "GPT-4 generated" in content if content else False,
+                "fallback_summary": True  # Mark as fallback
+            }
+            
+            if self.verbose:
+                logger.info(f"Generated fallback summary for {competitor}")
+            
+            return fallback_summary
+            
+        except Exception as e:
+            if self.verbose:
+                logger.error(f"Error generating fallback summary: {str(e)}")
             return None
     
     def batch_summarize(self, changelog_data: List[Dict]) -> List[Dict]:

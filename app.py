@@ -128,18 +128,26 @@ def analyze_competitors(competitors, days_back, use_ai_summaries, db):
                 st.warning(f"⚠️ Scraping failed for {competitor['name']}, using AI fallback")
                 logger.warning(f"Scraping failed for {competitor['name']}: {content}")
             
-            # Generate AI summary if enabled
+            # Generate AI summary if enabled and content is available (including fallback)
             summary = None
             if summarizer and content and not content.startswith("Error:"):
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=days_back)
                 
-                summary = summarizer.summarize_changelog(
-                    competitor['name'],
-                    content,
-                    start_date,
-                    end_date
-                )
+                try:
+                    summary = summarizer.summarize_changelog(
+                        competitor['name'],
+                        content,
+                        start_date,
+                        end_date
+                    )
+                    if summary:
+                        logger.info(f"Generated AI summary for {competitor['name']}")
+                    else:
+                        logger.warning(f"Failed to generate summary for {competitor['name']}")
+                except Exception as e:
+                    logger.error(f"Error generating summary for {competitor['name']}: {str(e)}")
+                    summary = None
             
             results[competitor['name']] = {
                 'competitor': competitor,
@@ -248,7 +256,7 @@ def display_detailed_view(results):
     """Display detailed competitor analysis."""
     st.subheader("🔍 Detailed Analysis")
     
-    for name, data in results.items():
+    for i, (name, data) in enumerate(results.items()):
         with st.expander(f"{name} - Detailed Analysis"):
             competitor = data['competitor']
             
@@ -265,7 +273,7 @@ def display_detailed_view(results):
                 else:
                     st.markdown("**Content Preview:**")
                     preview = content[:500] + "..." if len(content) > 500 else content
-                    st.text_area("Raw Content", preview, height=150, disabled=True, key=f"raw_content_{name}")
+                    st.text_area("Raw Content", preview, height=150, disabled=True, key=f"raw_content_{name}_{i}")
             
             # AI Summary
             summary = data.get('summary')
