@@ -1,36 +1,29 @@
 import streamlit as st
+import os
+import uuid
+from datetime import datetime, timedelta
+import logging
 
-try:
-    st.set_page_config(page_title="🧠 Competitor Intelligence Dashboard")
-    st.title("✅ Streamlit is running!")
+# Import local modules
+from scraper import ChangelogScraper, get_changelog
+from summarizer import ChangelogSummarizer
+from config import COMPETITORS
+from dashboard import create_momentum_chart, format_summary_card
+from database import DatabaseManager
+from notifier import send_slack_notification
 
-    import os
-    import uuid
-    from datetime import datetime, timedelta
-    import logging
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    # Import local modules
-    from scraper import ChangelogScraper, get_changelog
-    from summarizer import ChangelogSummarizer
-    from config import COMPETITORS
-    from dashboard import create_momentum_chart, format_summary_card
-    from database import DatabaseManager
-    from notifier import send_slack_notification
+# Set page configuration
+st.set_page_config(
+    page_title="🧠 Competitor Intelligence Dashboard",
+    layout="wide",
+    page_icon="🔍",
+    initial_sidebar_state="expanded"
+)
 
-    # Configure logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
-
-    # Page configuration
-    st.set_page_config(
-        page_title="Competitor Intelligence Dashboard",
-        page_icon="🔍",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-
-except Exception as e:
-    st.error(f"❌ Startup error: {e}")
 
 def main():
     """Main application function."""
