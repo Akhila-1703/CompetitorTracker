@@ -1,8 +1,8 @@
 import streamlit as st
 
 try:
-    st.title("🔍 Competitor Intelligence Dashboard (Startup Check)")
-    st.info("✅ App is starting...")
+    st.set_page_config(page_title="🧠 Competitor Intelligence Dashboard")
+    st.title("✅ Streamlit is running!")
 
     import os
     import uuid
