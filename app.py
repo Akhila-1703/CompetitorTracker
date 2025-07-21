@@ -74,6 +74,14 @@ def main():
     days_back = st.sidebar.slider("Days to analyze", 1, 30, 7)
     use_ai_summaries = st.sidebar.checkbox("Generate AI summaries", value=True)
     
+    # Persona view selector
+    st.sidebar.subheader("View Mode")
+    view_mode = st.sidebar.selectbox(
+        "Select Perspective",
+        ["All Teams", "PM View", "Sales View", "Design View"],
+        help="Filter insights by team perspective"
+    )
+    
     # Action buttons
     col1, col2 = st.sidebar.columns(2)
     
@@ -82,7 +90,7 @@ def main():
             if not selected_competitors:
                 st.error("Please select at least one competitor")
             else:
-                analyze_competitors(selected_competitors, days_back, use_ai_summaries, db)
+                analyze_competitors(selected_competitors, days_back, use_ai_summaries, db, view_mode)
     
     with col2:
         if st.button("📊 Load History"):
@@ -94,7 +102,7 @@ def main():
     else:
         display_welcome_message()
 
-def analyze_competitors(competitors, days_back, use_ai_summaries, db):
+def analyze_competitors(competitors, days_back, use_ai_summaries, db, view_mode="All Teams"):
     """Analyze selected competitors and display results."""
     st.header("📈 Analysis Results")
     
@@ -188,8 +196,16 @@ def analyze_competitors(competitors, days_back, use_ai_summaries, db):
     progress_bar.empty()
     status_text.empty()
     
-    # Store results in session state
+    # Store results in session state with view mode
     st.session_state.analysis_results = results
+    st.session_state.view_mode = view_mode
+    
+    # Display trend of the week
+    if summarizer and results:
+        summaries = [data['summary'] for data in results.values() if data.get('summary')]
+        if summaries:
+            trend = summarizer.analyze_trend_of_week(summaries)
+            st.success(f"📈 **Trend of the Week:** {trend}")
     
     # Display results
     display_analysis_results()
@@ -223,26 +239,32 @@ def display_analysis_results():
     
     st.divider()
     
+    # Get view mode from session state
+    view_mode = st.session_state.get('view_mode', 'All Teams')
+    
+    # Filter results based on view mode
+    filtered_results = filter_results_by_persona(results, view_mode)
+    
     # Detailed results
     tabs = st.tabs(["📋 Summary View", "📊 Momentum Analysis", "🔍 Detailed View"])
     
     with tabs[0]:
-        display_summary_view(results)
+        display_summary_view(filtered_results, view_mode)
     
     with tabs[1]:
-        display_momentum_analysis(results)
+        display_momentum_analysis(filtered_results)
     
     with tabs[2]:
-        display_detailed_view(results)
+        display_detailed_view(filtered_results, view_mode)
 
-def display_summary_view(results):
+def display_summary_view(results, view_mode="All Teams"):
     """Display summarized competitor insights."""
-    st.subheader("🎯 Key Insights")
+    st.subheader(f"🎯 Key Insights ({view_mode})")
     
     for name, data in results.items():
         summary = data.get('summary')
         if summary:
-            format_summary_card(name, summary)
+            format_summary_card(name, summary, view_mode)
         else:
             st.info(f"No AI summary available for {name}")
 
@@ -268,9 +290,9 @@ def display_momentum_analysis(results):
     else:
         st.info("No momentum data available. Generate AI summaries to see momentum analysis.")
 
-def display_detailed_view(results):
+def display_detailed_view(results, view_mode="All Teams"):
     """Display detailed competitor analysis."""
-    st.subheader("🔍 Detailed Analysis")
+    st.subheader(f"🔍 Detailed Analysis ({view_mode})")
     
     for i, (name, data) in enumerate(results.items()):
         with st.expander(f"{name} - Detailed Analysis"):
@@ -316,6 +338,64 @@ def load_historical_data(db):
     
     except Exception as e:
         st.error(f"Failed to load historical data: {str(e)}")
+
+def filter_results_by_persona(results, view_mode):
+    """Filter results based on persona view."""
+    if view_mode == "All Teams":
+        return results
+    
+    # For now, return all results but will be used for filtering in the display functions
+    return results
+
+def format_summary_card(name, summary, view_mode="All Teams"):
+    """Format summary card with persona-specific focus."""
+    with st.container():
+        # Header with confidence indicator
+        confidence = summary.get('confidence_level', 'medium')
+        confidence_color = {"high": "🟢", "medium": "🟡", "low": "🔴"}
+        confidence_icon = confidence_color.get(confidence, "⚪")
+        
+        st.markdown(f"### {name} {confidence_icon}")
+        
+        # Persona-specific content filtering
+        bullets = summary.get('summary_bullets', [])
+        strategic_insight = summary.get('strategic_insight', '')
+        
+        if view_mode == "Sales View":
+            # Focus on pricing, market positioning, competitive advantages
+            filtered_bullets = [b for b in bullets if any(word in b.lower() 
+                              for word in ['pricing', 'plan', 'subscription', 'cost', 'revenue', 'market', 'customer'])]
+            if not filtered_bullets:
+                filtered_bullets = bullets[:2]  # Show at least some content
+            bullets = filtered_bullets
+        elif view_mode == "Design View":
+            # Focus on UI/UX, design, user experience
+            filtered_bullets = [b for b in bullets if any(word in b.lower() 
+                              for word in ['ui', 'ux', 'design', 'interface', 'user', 'visual', 'layout', 'experience'])]
+            if not filtered_bullets:
+                filtered_bullets = bullets[:2]
+            bullets = filtered_bullets
+        elif view_mode == "PM View":
+            # Focus on features, strategy, roadmap
+            filtered_bullets = [b for b in bullets if any(word in b.lower() 
+                              for word in ['feature', 'product', 'launch', 'beta', 'roadmap', 'strategy', 'integration'])]
+            if not filtered_bullets:
+                filtered_bullets = bullets
+            bullets = filtered_bullets
+        
+        # Display bullets
+        for bullet in bullets:
+            st.markdown(f"• {bullet}")
+        
+        # Strategic insight
+        if strategic_insight:
+            st.markdown(f"**💡 Strategic Insight:** {strategic_insight}")
+        
+        # Impact score
+        impact_score = summary.get('impact_score', 50)
+        st.progress(impact_score / 100, f"Impact Score: {impact_score}/100")
+        
+        st.divider()
 
 def display_welcome_message():
     """Display welcome message and instructions."""

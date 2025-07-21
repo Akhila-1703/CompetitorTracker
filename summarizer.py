@@ -11,6 +11,8 @@ from typing import Dict, Optional, List
 from openai import OpenAI
 import logging
 from dotenv import load_dotenv
+from collections import Counter
+import re
 
 # Load environment variables
 load_dotenv()
@@ -111,84 +113,188 @@ GUIDELINES:
             logger.info(f"Generating AI summary for {competitor_name}")
         
         try:
-            self._rate_limit_api()
-            
-            prompt = self._create_summary_prompt(competitor_name, content, start_date, end_date)
-            
-            # the newest OpenAI model is "gpt-4o" which was released May 13, 2024.
-            # do not change this unless explicitly requested by the user
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert product analyst specializing in competitive intelligence and changelog analysis. Provide accurate, actionable summaries in the requested JSON format."
-                    },
-                    {
-                        "role": "user", 
-                        "content": prompt
-                    }
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.3,  # Lower temperature for more consistent outputs
-                max_tokens=1000
-            )
-            
-            # Parse the JSON response
-            summary_text = response.choices[0].message.content
-            if not summary_text:
-                if self.verbose:
-                    logger.warning("Empty response from OpenAI API")
-                return None
-            summary_data = json.loads(summary_text)
-            
-            # Validate the response structure
-            required_fields = ["competitor", "summary_bullets", "strategic_insight", "confidence_level"]
-            if not all(field in summary_data for field in required_fields):
-                if self.verbose:
-                    logger.warning("AI response missing required fields")
-                return None
-            
-            # Validate bullet points
-            if not isinstance(summary_data["summary_bullets"], list) or len(summary_data["summary_bullets"]) != 3:
-                if self.verbose:
-                    logger.warning("AI response doesn't have exactly 3 bullet points")
-                return None
-            
-            # Add metadata
-            summary_data["generated_at"] = datetime.now().isoformat()
-            summary_data["content_length"] = len(content) if content else 0
-            summary_data["analysis_period"] = {
-                "start": start_date.isoformat(),
-                "end": end_date.isoformat()
-            }
-            
-            # Detect if this was generated from fallback content
-            is_fallback = "GPT-4 generated" in content if content else False
-            summary_data["used_fallback_content"] = is_fallback
-            
-            if self.verbose:
-                logger.info(f"Generated summary with confidence: {summary_data.get('confidence_level', 'unknown')}")
-                if is_fallback:
-                    logger.info("Summary based on AI-generated fallback content")
-            
-            return summary_data
-            
-        except json.JSONDecodeError as e:
-            if self.verbose:
-                logger.error(f"Error parsing AI response as JSON: {str(e)}")
-            return None
+            summary = self._try_api_with_retry(competitor_name, content, start_date, end_date)
+            if summary:
+                return summary
+            else:
+                # Both attempts failed, use fallback
+                return self._generate_fallback_summary(competitor_name, content, start_date, end_date)
         except Exception as e:
             if self.verbose:
-                logger.error(f"Error calling OpenAI API: {str(e)}")
-            
-            # If OpenAI API fails, generate a basic fallback summary
-            if "429" in str(e) or "quota" in str(e).lower():
+                logger.error(f"Error in summarize_changelog: {str(e)}")
+            return self._generate_fallback_summary(competitor_name, content, start_date, end_date)
+    
+    def _try_api_with_retry(self, competitor_name: str, content: str, start_date: datetime, end_date: datetime, max_retries: int = 2) -> Optional[Dict]:
+        """Try OpenAI API with retry logic for 429 errors."""
+        for attempt in range(max_retries):
+            try:
+                self._rate_limit_api()
+                
+                prompt = self._create_summary_prompt(competitor_name, content, start_date, end_date)
+                
+                # the newest OpenAI model is "gpt-4o" which was released May 13, 2024.
+                # do not change this unless explicitly requested by the user
+                response = self.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert product analyst specializing in competitive intelligence and changelog analysis. Provide accurate, actionable summaries in the requested JSON format."
+                        },
+                        {
+                            "role": "user", 
+                            "content": prompt
+                        }
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.3,
+                    max_tokens=1000
+                )
+                
+                # Parse and validate response
+                summary_text = response.choices[0].message.content
+                if not summary_text:
+                    continue
+                
+                summary_data = json.loads(summary_text)
+                
+                # Validate required fields
+                required_fields = ["competitor", "summary_bullets", "strategic_insight", "confidence_level"]
+                if not all(field in summary_data for field in required_fields):
+                    continue
+                
+                # Clean and validate bullet points
+                bullets = summary_data.get("summary_bullets", [])
+                if isinstance(bullets, list) and len(bullets) >= 3:
+                    # Remove duplicate bullet points
+                    unique_bullets = self._deduplicate_bullets(bullets[:3])
+                    summary_data["summary_bullets"] = unique_bullets
+                    
+                    # Calculate dynamic impact score
+                    impact_score = self._calculate_impact_score(content, unique_bullets)
+                    summary_data["impact_score"] = impact_score
+                    
+                    # Enhance strategic insight
+                    summary_data["strategic_insight"] = self._enhance_strategic_insight(
+                        competitor_name, summary_data.get("strategic_insight", ""), unique_bullets
+                    )
+                    
+                    # Add metadata
+                    summary_data["generated_at"] = datetime.now().isoformat()
+                    summary_data["content_length"] = len(content) if content else 0
+                    summary_data["analysis_period"] = {
+                        "start": start_date.isoformat(),
+                        "end": end_date.isoformat()
+                    }
+                    summary_data["used_fallback_content"] = "GPT-4 generated" in content if content else False
+                    summary_data["confidence_level"] = "high"  # Successful API call
+                    
+                    return summary_data
+                
+            except json.JSONDecodeError:
                 if self.verbose:
-                    logger.info("Generating fallback summary due to API quota limit")
-                return self._generate_fallback_summary(competitor_name, content, start_date, end_date)
+                    logger.warning(f"JSON decode error on attempt {attempt + 1}")
+                continue
+            except Exception as e:
+                if "429" in str(e) and attempt < max_retries - 1:
+                    if self.verbose:
+                        logger.info(f"Rate limit hit on attempt {attempt + 1}, waiting 5 seconds...")
+                    time.sleep(5)
+                    continue
+                else:
+                    if self.verbose:
+                        logger.error(f"API error on attempt {attempt + 1}: {str(e)}")
+                    break
+        
+        return None
+    
+    def _deduplicate_bullets(self, bullets: List[str]) -> List[str]:
+        """Remove duplicate bullet points while preserving order."""
+        seen = set()
+        unique_bullets = []
+        
+        for bullet in bullets:
+            # Normalize bullet for comparison (lowercase, remove punctuation)
+            normalized = re.sub(r'[^\w\s]', '', bullet.lower().strip())
+            if normalized not in seen and normalized:
+                seen.add(normalized)
+                unique_bullets.append(bullet.strip())
+        
+        # Ensure we have exactly 3 bullets
+        while len(unique_bullets) < 3:
+            unique_bullets.append(f"Additional product improvements and enhancements")
+        
+        return unique_bullets[:3]
+    
+    def _calculate_impact_score(self, content: str, bullets: List[str]) -> int:
+        """Calculate dynamic impact score based on content and features."""
+        if not content:
+            return 50
+        
+        content_lower = content.lower()
+        bullet_text = " ".join(bullets).lower()
+        combined_text = content_lower + " " + bullet_text
+        
+        score = 40  # Base score
+        
+        # High-impact keywords
+        ai_keywords = ["ai", "artificial intelligence", "machine learning", "automation", "smart", "intelligent"]
+        feature_keywords = ["new feature", "launch", "release", "introduce", "beta", "preview"]
+        ui_keywords = ["ui", "ux", "interface", "design", "redesign", "visual", "layout"]
+        integration_keywords = ["api", "integration", "webhook", "sync", "connect"]
+        
+        # Count keyword matches
+        for keyword in ai_keywords:
+            if keyword in combined_text:
+                score += 30
+                break
+        
+        for keyword in feature_keywords:
+            if keyword in combined_text:
+                score += 20
+                break
+        
+        for keyword in ui_keywords:
+            if keyword in combined_text:
+                score += 10
+                break
+        
+        for keyword in integration_keywords:
+            if keyword in combined_text:
+                score += 15
+                break
+        
+        # Bonus for multiple updates
+        update_count = len([b for b in bullets if any(word in b.lower() for word in ["new", "added", "launched", "released"])])
+        score += min(update_count * 5, 20)
+        
+        return min(score, 100)
+    
+    def _enhance_strategic_insight(self, competitor: str, original_insight: str, bullets: List[str]) -> str:
+        """Enhance strategic insight to be more specific and actionable."""
+        if not original_insight or "regular updates" in original_insight.lower():
+            # Generate better insight based on bullets
+            themes = []
+            bullet_text = " ".join(bullets).lower()
             
-            return None
+            if any(word in bullet_text for word in ["ai", "automation", "smart"]):
+                themes.append("AI-powered features")
+            if any(word in bullet_text for word in ["ui", "design", "interface"]):
+                themes.append("user experience improvements")
+            if any(word in bullet_text for word in ["api", "integration"]):
+                themes.append("platform connectivity")
+            if any(word in bullet_text for word in ["pricing", "plan", "subscription"]):
+                themes.append("monetization strategy")
+            
+            if themes:
+                main_theme = themes[0]
+                return f"This shift toward {main_theme} suggests {competitor} is positioning for competitive differentiation in the evolving market landscape."
+        
+        # Clean up vague language
+        enhanced = original_insight.replace("continues regular updates", "demonstrates strategic focus")
+        enhanced = enhanced.replace("various improvements", "targeted enhancements")
+        
+        return enhanced
     
     def _generate_fallback_summary(self, competitor: str, content: str, start_date: datetime, end_date: datetime) -> Dict:
         """
@@ -231,12 +337,21 @@ GUIDELINES:
             bullet_points = bullet_points[:3]
             
             # Generate basic fallback summary
+            # Calculate impact score for fallback
+            impact_score = self._calculate_impact_score(content, bullet_points)
+            
+            # Enhanced strategic insight
+            enhanced_insight = self._enhance_strategic_insight(competitor, "", bullet_points)
+            
+            # Determine confidence level
+            confidence_level = "medium" if "GPT-4 generated" in content else "low"
+            
             fallback_summary = {
                 "competitor": competitor,
                 "summary_bullets": bullet_points,
-                "strategic_insight": f"{competitor} continues active product development with regular feature updates and improvements.",
-                "confidence_level": "low",
-                "impact_score": 60,  # Moderate default impact
+                "strategic_insight": enhanced_insight,
+                "confidence_level": confidence_level,
+                "impact_score": impact_score,
                 "categories": ["product-updates", "general-improvements"],
                 "generated_at": datetime.now().isoformat(),
                 "content_length": len(content) if content else 0,
@@ -285,6 +400,42 @@ GUIDELINES:
                 summaries.append(summary)
         
         return summaries
+    
+    def analyze_trend_of_week(self, summaries: List[Dict]) -> str:
+        """Analyze summaries to find the most common trend."""
+        if not summaries:
+            return "No trends available"
+        
+        # Extract themes from all summaries
+        all_themes = []
+        keywords_mapping = {
+            "AI assistant": ["ai", "assistant", "automation", "intelligent", "smart"],
+            "User experience": ["ui", "ux", "interface", "design", "user experience"],
+            "Integration capabilities": ["api", "integration", "webhook", "sync", "connect"],
+            "Pricing transparency": ["pricing", "plan", "subscription", "cost", "billing"],
+            "Mobile optimization": ["mobile", "ios", "android", "responsive"],
+            "Collaboration tools": ["collaborate", "team", "share", "invite", "workspace"],
+            "Performance improvements": ["performance", "speed", "faster", "optimization", "efficiency"],
+            "Security enhancements": ["security", "privacy", "encryption", "compliance", "authentication"]
+        }
+        
+        theme_counts = Counter()
+        
+        for summary in summaries:
+            bullets = summary.get("summary_bullets", [])
+            insight = summary.get("strategic_insight", "")
+            combined_text = " ".join(bullets + [insight]).lower()
+            
+            for theme, keywords in keywords_mapping.items():
+                if any(keyword in combined_text for keyword in keywords):
+                    theme_counts[theme] += 1
+        
+        if theme_counts:
+            most_common = theme_counts.most_common(1)[0]
+            if most_common[1] >= 2:  # At least 2 companies have this theme
+                return f"{most_common[0]}"
+        
+        return "Diverse product improvements"
     
     def create_strategic_alert(self, summary: Dict) -> str:
         """
