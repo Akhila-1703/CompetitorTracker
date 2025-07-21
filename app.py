@@ -61,12 +61,21 @@ def main():
         st.sidebar.error(f"❌ Database connection failed: {str(e)}")
         db = None
     
-    # Competitor selection
+    # Competitor selection (including custom ones)
     st.sidebar.subheader("Select Competitors")
     selected_competitors = []
     
-    for i, competitor in enumerate(COMPETITORS):
-        if st.sidebar.checkbox(competitor['name'], value=True, key=f"competitor_{i}"):
+    # Get all competitors (built-in + custom)
+    all_competitors = COMPETITORS.copy()
+    if 'custom_competitors' in st.session_state:
+        all_competitors.extend(st.session_state.custom_competitors)
+    
+    for i, competitor in enumerate(all_competitors):
+        label = competitor['name']
+        if competitor.get('category') == 'custom':
+            label += " (Custom)"
+        
+        if st.sidebar.checkbox(label, value=True, key=f"competitor_{i}"):
             selected_competitors.append(competitor)
     
     # Analysis settings
@@ -74,11 +83,11 @@ def main():
     days_back = st.sidebar.slider("Days to analyze", 1, 30, 7)
     use_ai_summaries = st.sidebar.checkbox("Generate AI summaries", value=True)
     
-    # Persona view selector
-    st.sidebar.subheader("View Mode")
+    # Persona view selector with emojis
+    st.sidebar.subheader("🎯 View Mode")
     view_mode = st.sidebar.selectbox(
         "Select Perspective",
-        ["All Teams", "PM View", "Sales View", "Design View"],
+        ["🧑‍🤝‍🧑 All Teams", "👩‍💼 PM View", "💰 Sales View", "🎨 Design View"],
         help="Filter insights by team perspective"
     )
     
@@ -95,6 +104,23 @@ def main():
     with col2:
         if st.button("📊 Load History"):
             load_historical_data(db)
+    
+    # New Competitor Addition Section
+    st.sidebar.subheader("➕ Add New Competitor")
+    with st.sidebar.expander("Add Custom Competitor"):
+        new_name = st.text_input("Company Name", key="new_competitor_name")
+        new_url = st.text_input("Changelog URL", key="new_competitor_url")
+        new_platform = st.selectbox(
+            "Platform Type",
+            ["generic", "notion", "linear", "github", "appstore"],
+            key="new_competitor_platform"
+        )
+        
+        if st.button("➕ Add Competitor", key="add_competitor_btn"):
+            if new_name and new_url:
+                add_new_competitor(new_name, new_url, new_platform, db)
+            else:
+                st.error("Please provide both name and URL")
     
     # Main content area
     if st.session_state.analysis_results:
@@ -189,9 +215,13 @@ def analyze_competitors(competitors, days_back, use_ai_summaries, db, view_mode=
                     logger.error(f"Failed to save analysis to database: {str(e)}")
             
         except Exception as e:
-            error_msg = f"Error analyzing {competitor['name']}: {str(e)}"
-            logger.error(error_msg)
-            st.error(error_msg)
+            # User-friendly error handling
+            error_str = str(e)
+            if "429" in error_str or "quota" in error_str.lower():
+                st.warning(f"⚠️ AI summary temporarily unavailable for {competitor['name']} (API quota exceeded)")
+            else:
+                st.error(f"❌ Analysis failed for {competitor['name']}: {error_str}")
+            logger.error(f"Error analyzing {competitor['name']}: {error_str}")
     
     progress_bar.empty()
     status_text.empty()
@@ -200,12 +230,20 @@ def analyze_competitors(competitors, days_back, use_ai_summaries, db, view_mode=
     st.session_state.analysis_results = results
     st.session_state.view_mode = view_mode
     
-    # Display trend of the week
+    # Display trend of the week with enhanced styling
     if summarizer and results:
         summaries = [data['summary'] for data in results.values() if data.get('summary')]
         if summaries:
             trend = summarizer.analyze_trend_of_week(summaries)
-            st.success(f"📈 **Trend of the Week:** {trend}")
+            st.markdown(
+                f"""
+                <div style='background-color: #E3F2FD; padding: 15px; border-radius: 10px; border-left: 5px solid #2196F3; margin: 10px 0;'>
+                    <h3 style='color: #1976D2; margin: 0;'>📈 Trend of the Week</h3>
+                    <p style='font-size: 18px; font-weight: bold; color: #424242; margin: 5px 0 0 0;'>{trend}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
     
     # Display results
     display_analysis_results()
@@ -245,16 +283,19 @@ def display_analysis_results():
     # Filter results based on view mode
     filtered_results = filter_results_by_persona(results, view_mode)
     
-    # Detailed results
-    tabs = st.tabs(["📋 Summary View", "📊 Momentum Analysis", "🔍 Detailed View"])
+    # Detailed results with momentum leaderboard
+    tabs = st.tabs(["📋 Summary View", "🏁 Momentum Leaderboard", "📊 Momentum Analysis", "🔍 Detailed View"])
     
     with tabs[0]:
         display_summary_view(filtered_results, view_mode)
     
     with tabs[1]:
-        display_momentum_analysis(filtered_results)
+        display_momentum_leaderboard(filtered_results)
     
     with tabs[2]:
+        display_momentum_analysis(filtered_results)
+    
+    with tabs[3]:
         display_detailed_view(filtered_results, view_mode)
 
 def display_summary_view(results, view_mode="All Teams"):
@@ -341,11 +382,118 @@ def load_historical_data(db):
 
 def filter_results_by_persona(results, view_mode):
     """Filter results based on persona view."""
-    if view_mode == "All Teams":
+    # Clean view mode string
+    clean_view_mode = view_mode.replace("🧑‍🤝‍🧑 ", "").replace("👩‍💼 ", "").replace("💰 ", "").replace("🎨 ", "")
+    
+    if clean_view_mode == "All Teams":
         return results
     
-    # For now, return all results but will be used for filtering in the display functions
+    # For now, return all results but filtering is handled in display functions
     return results
+
+def format_impact_score(score):
+    """Format impact score with visual indicators."""
+    if score >= 80:
+        return f"🔥 {score}/100 (High)"
+    elif score >= 60:
+        return f"⚠️ {score}/100 (Moderate)"
+    else:
+        return f"💤 {score}/100 (Low)"
+
+def display_momentum_leaderboard(results):
+    """Display momentum leaderboard ranking competitors by impact score."""
+    st.subheader("🏁 Momentum Leaderboard")
+    
+    # Extract impact scores
+    leaderboard_data = []
+    for name, data in results.items():
+        summary = data.get('summary')
+        if summary:
+            impact_score = summary.get('impact_score', 50)
+            confidence = summary.get('confidence_level', 'medium')
+            leaderboard_data.append({
+                'Competitor': name,
+                'Impact Score': impact_score,
+                'Confidence': confidence,
+                'Visual': format_impact_score(impact_score)
+            })
+    
+    if leaderboard_data:
+        # Sort by impact score
+        leaderboard_data.sort(key=lambda x: x['Impact Score'], reverse=True)
+        
+        # Add rank
+        for i, item in enumerate(leaderboard_data):
+            rank_emoji = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
+            item['Rank'] = rank_emoji
+        
+        # Display as table
+        st.markdown("**Top Performers This Week:**")
+        
+        for item in leaderboard_data:
+            col1, col2, col3 = st.columns([1, 3, 2])
+            with col1:
+                st.markdown(f"**{item['Rank']}**")
+            with col2:
+                st.markdown(f"**{item['Competitor']}**")
+            with col3:
+                st.markdown(item['Visual'])
+        
+        # Show bar chart
+        st.markdown("---")
+        import plotly.express as px
+        import pandas as pd
+        
+        df = pd.DataFrame(leaderboard_data)
+        fig = px.bar(
+            df, 
+            x='Competitor', 
+            y='Impact Score',
+            title='Momentum Scores by Competitor',
+            color='Impact Score',
+            color_continuous_scale='Viridis'
+        )
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No momentum data available. Generate AI summaries to see the leaderboard.")
+
+def add_new_competitor(name, url, platform, db):
+    """Add a new competitor dynamically."""
+    try:
+        # Add to global competitors list (in-memory)
+        new_competitor = {
+            'name': name,
+            'url': url,
+            'platform': platform,
+            'category': 'custom'
+        }
+        
+        # Store in session state
+        if 'custom_competitors' not in st.session_state:
+            st.session_state.custom_competitors = []
+        
+        st.session_state.custom_competitors.append(new_competitor)
+        
+        # Save to database if available
+        if db:
+            try:
+                db.save_competitor_analysis(name, {
+                    'url': url,
+                    'platform': platform,
+                    'added_at': datetime.now().isoformat(),
+                    'custom_competitor': True
+                }, {'status': 'added'})
+            except Exception as e:
+                st.warning(f"Failed to save to database: {str(e)}")
+        
+        st.success(f"✅ Added {name} to competitor list!")
+        
+        # Trigger rerun to update the interface
+        st.rerun()
+        
+    except Exception as e:
+        st.error(f"Failed to add competitor: {str(e)}")
 
 def format_summary_card(name, summary, view_mode="All Teams"):
     """Format summary card with persona-specific focus."""
@@ -361,24 +509,27 @@ def format_summary_card(name, summary, view_mode="All Teams"):
         bullets = summary.get('summary_bullets', [])
         strategic_insight = summary.get('strategic_insight', '')
         
-        if view_mode == "Sales View":
+        # Clean view mode for comparison
+        clean_view_mode = view_mode.replace("🧑‍🤝‍🧑 ", "").replace("👩‍💼 ", "").replace("💰 ", "").replace("🎨 ", "")
+        
+        if clean_view_mode == "Sales View":
             # Focus on pricing, market positioning, competitive advantages
             filtered_bullets = [b for b in bullets if any(word in b.lower() 
-                              for word in ['pricing', 'plan', 'subscription', 'cost', 'revenue', 'market', 'customer'])]
+                              for word in ['pricing', 'plan', 'subscription', 'cost', 'revenue', 'market', 'customer', 'enterprise', 'tier'])]
             if not filtered_bullets:
                 filtered_bullets = bullets[:2]  # Show at least some content
             bullets = filtered_bullets
-        elif view_mode == "Design View":
+        elif clean_view_mode == "Design View":
             # Focus on UI/UX, design, user experience
             filtered_bullets = [b for b in bullets if any(word in b.lower() 
-                              for word in ['ui', 'ux', 'design', 'interface', 'user', 'visual', 'layout', 'experience'])]
+                              for word in ['ui', 'ux', 'design', 'interface', 'user', 'visual', 'layout', 'experience', 'theme', 'mobile'])]
             if not filtered_bullets:
                 filtered_bullets = bullets[:2]
             bullets = filtered_bullets
-        elif view_mode == "PM View":
+        elif clean_view_mode == "PM View":
             # Focus on features, strategy, roadmap
             filtered_bullets = [b for b in bullets if any(word in b.lower() 
-                              for word in ['feature', 'product', 'launch', 'beta', 'roadmap', 'strategy', 'integration'])]
+                              for word in ['feature', 'product', 'launch', 'beta', 'roadmap', 'strategy', 'integration', 'api', 'workflow'])]
             if not filtered_bullets:
                 filtered_bullets = bullets
             bullets = filtered_bullets
@@ -391,9 +542,11 @@ def format_summary_card(name, summary, view_mode="All Teams"):
         if strategic_insight:
             st.markdown(f"**💡 Strategic Insight:** {strategic_insight}")
         
-        # Impact score
+        # Enhanced impact score with visual indicators
         impact_score = summary.get('impact_score', 50)
-        st.progress(impact_score / 100, f"Impact Score: {impact_score}/100")
+        impact_visual = format_impact_score(impact_score)
+        st.markdown(f"**Impact Score:** {impact_visual}")
+        st.progress(impact_score / 100)
         
         st.divider()
 
