@@ -7,11 +7,7 @@ try:
     import os
     import uuid
     from datetime import datetime, timedelta
-    from dotenv import load_dotenv
     import logging
-
-    # Load environment variables
-    load_dotenv()
 
     # Import local modules
     from scraper import ChangelogScraper, get_changelog
@@ -49,7 +45,7 @@ def main():
     st.sidebar.header("Configuration")
     
     # API Key status
-    openai_key = os.getenv("OPENAI_API_KEY")
+    openai_key = st.secrets.get("OPENAI_API_KEY", None)
     if openai_key:
         st.sidebar.success("✅ OpenAI API Key configured")
     else:
