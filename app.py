@@ -64,8 +64,8 @@ def main():
     st.sidebar.subheader("Select Competitors")
     selected_competitors = []
     
-    for competitor in COMPETITORS:
-        if st.sidebar.checkbox(competitor['name'], value=True):
+    for i, competitor in enumerate(COMPETITORS):
+        if st.sidebar.checkbox(competitor['name'], value=True, key=f"competitor_{i}"):
             selected_competitors.append(competitor)
     
     # Analysis settings
@@ -265,7 +265,7 @@ def display_detailed_view(results):
                 else:
                     st.markdown("**Content Preview:**")
                     preview = content[:500] + "..." if len(content) > 500 else content
-                    st.text_area("Raw Content", preview, height=150, disabled=True)
+                    st.text_area("Raw Content", preview, height=150, disabled=True, key=f"raw_content_{name}")
             
             # AI Summary
             summary = data.get('summary')
