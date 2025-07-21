@@ -186,7 +186,7 @@ GUIDELINES:
             if "429" in str(e) or "quota" in str(e).lower():
                 if self.verbose:
                     logger.info("Generating fallback summary due to API quota limit")
-                return self._generate_fallback_summary(competitor, content, start_date, end_date)
+                return self._generate_fallback_summary(competitor_name, content, start_date, end_date)
             
             return None
     

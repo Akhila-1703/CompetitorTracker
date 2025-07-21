@@ -5,6 +5,7 @@ Monitors competitor changelog updates, generates AI-powered insights, and tracks
 
 import streamlit as st
 import os
+import uuid
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import logging
@@ -118,15 +119,30 @@ def analyze_competitors(competitors, days_back, use_ai_summaries, db):
         progress_bar.progress(progress)
         
         try:
-            # Scrape changelog content
+            # Scrape changelog content with automatic fallback
             content = scraper.scrape_changelog(
                 competitor['url'], 
                 competitor.get('platform', 'generic')
             )
             
+            # If scraping fails, automatically generate fallback content
             if not content or content.startswith("Error:"):
-                st.warning(f"⚠️ Scraping failed for {competitor['name']}, using AI fallback")
+                st.warning(f"⚠️ Scraping failed for {competitor['name']}, generating AI fallback")
                 logger.warning(f"Scraping failed for {competitor['name']}: {content}")
+                
+                # Generate AI fallback content
+                try:
+                    fallback_content = scraper.get_changelog_fallback(competitor['name'])
+                    if fallback_content and not fallback_content.startswith("⚠️"):
+                        content = fallback_content
+                        logger.info(f"Generated AI fallback content for {competitor['name']}")
+                    else:
+                        logger.error(f"Failed to generate fallback for {competitor['name']}: {fallback_content}")
+                        content = fallback_content  # Keep the error message
+                except Exception as e:
+                    error_msg = f"Error generating fallback for {competitor['name']}: {str(e)}"
+                    logger.error(error_msg)
+                    content = f"Error: {error_msg}"
             
             # Generate AI summary if enabled and content is available (including fallback)
             summary = None
@@ -273,7 +289,7 @@ def display_detailed_view(results):
                 else:
                     st.markdown("**Content Preview:**")
                     preview = content[:500] + "..." if len(content) > 500 else content
-                    st.text_area("Raw Content", preview, height=150, disabled=True, key=f"raw_content_{name}_{i}")
+                    st.text_area("Raw Content", preview, height=150, disabled=True, key=f"raw_content_{name}_{uuid.uuid4()}")
             
             # AI Summary
             summary = data.get('summary')
