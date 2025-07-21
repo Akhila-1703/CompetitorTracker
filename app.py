@@ -9,8 +9,8 @@ from scraper import ChangelogScraper, get_changelog
 from summarizer import ChangelogSummarizer
 from config import COMPETITORS
 from dashboard import create_momentum_chart, format_summary_card
-from database import DatabaseManager
-from notifier import send_slack_notification
+#from database import DatabaseManager
+#from notifier import send_slack_notification
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -46,12 +46,15 @@ def main():
         st.sidebar.info("Please add OPENAI_API_KEY to your .env file")
     
     # Database connection status
+    '''
     try:
         db = DatabaseManager()
         st.sidebar.success("✅ Database connected")
     except Exception as e:
         st.sidebar.error(f"❌ Database connection failed: {str(e)}")
         db = None
+        '''
+    db = None
     
     # Competitor selection (including custom ones)
     st.sidebar.subheader("Select Competitors")
